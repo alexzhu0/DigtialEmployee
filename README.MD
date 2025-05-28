@@ -11,10 +11,11 @@
 - 团队协作评估
 
 ### 2. 知识管理
-- 知识库文章管理
-- 版本控制与变更追踪
-- 评论与讨论功能
-- 知识分享评估
+- **内部知识库**: 系统支持创建、版本控制和评论内部知识库文章，存储于应用数据库中。
+- **Letta AI 知识增强**: 
+    - **文档上传与处理**: 支持通过 API 上传各类文档 (如 PDF, TXT 等，具体支持类型取决于 Letta 配置) 到集成的 Letta AI 平台。Letta 平台负责处理这些文档并将其存储在专门的知识代理的记忆中。
+    - **智能语义检索**: "元芳"智能助理能够利用 Letta 知识代理对上传的文档内容进行高效的语义检索，从而更准确地回答基于这些文档的问题。
+    - **知识分享评估**: （Existing feature, can remain if applicable to internal knowledge base)
 
 ### 3. 数据分析
 - 团队绩效分析
@@ -49,6 +50,7 @@
   * 对话管理与状态追踪
   * 工具函数调用链
   * 记忆系统实现
+  * **Letta AI 平台集成**: 用于高级知识管理，通过专门的 Letta 知识代理对上传的文档进行语义检索和问答。
 
 ### 2. 核心组件
 
@@ -72,7 +74,8 @@
 - EmotionAnalysisTool: 情感分析
 - TaskManagementTool: 任务管理
 - TeamAnalyticsTool: 团队分析
-- KnowledgeBaseTool: 知识库管理
+- KnowledgeBaseTool: 内部知识库管理
+- LettaKnowledgeTool: 通过 Letta AI 平台进行语义化文档检索
 ```
 
 #### API接口
@@ -81,7 +84,7 @@
 - 团队管理API: /teams/*
 - 项目管理API: /projects/*
 - 任务管理API: /tasks/*
-- 知识库API: /knowledge/*
+- 知识库API: /knowledge/* (包含内部知识库管理及 `/knowledge/upload_to_letta` 用于文档上传至Letta)
 - 分析统计API: /analytics/*
 ```
 
@@ -152,6 +155,8 @@ graph TD
     G --> H[用户响应]
 ```
 
+*Note on Letta Integration: The '工具链' (Toolchain) can now also interact with an external 'Letta AI Platform' for specialized knowledge queries. Results from Letta would feed back into the toolchain or response generation.*
+
 ## 🚀 部署指南
 
 ### 1. 环境要求
@@ -175,13 +180,24 @@ conda activate digital_employee
 
 3. **安装依赖**
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt 
+# requirements.txt should now include 'letta-client'
 ```
 
 4. **配置环境变量**
 ```bash
 cp .env.example .env
 # 编辑.env文件,填入必要的配置信息
+# .env example additions for Letta Integration
+LETTA_SERVER_URL="http://your-letta-server-url:8283"
+LETTA_SERVER_TOKEN="your-letta-server-api-token"
+LETTA_KNOWLEDGE_AGENT_NAME="YuanfangKnowledgeAgent" # Default name for the Letta agent dedicated to knowledge
+# Optional: Specify exact models for the Letta Knowledge Agent if defaults are not desired
+# LETTA_KNOWLEDGE_LLM_MODEL="Qwen/Qwen2-7B-Instruct"
+# LETTA_KNOWLEDGE_EMBEDDING_MODEL="BAAI/bge-m3"
+# Note: LETTA_KNOWLEDGE_AGENT_ID is resolved at runtime by the application if not set.
+# If you have a pre-existing Letta agent ID for knowledge, you can set it here.
+# LETTA_KNOWLEDGE_AGENT_ID="your-specific-letta-agent-id" 
 ```
 
 5. **初始化数据库**
@@ -214,7 +230,7 @@ uvicorn main:app --host 0.0.0.0 --port 8001
 ## 🔒 安全特性
 
 ### 1. 认证授权
-- JWT认证
+- JWT认证: 系统采用基于 JWT (JSON Web Tokens) 的安全认证机制保护 API 接口。
 - 基于角色的访问控制
 - API密钥管理
 
@@ -426,4 +442,40 @@ sequenceDiagram
     V->>D: 保存版本信息
     D-->>K: 确认保存
     K-->>U: 返回结果
+```
+
+*Note on Letta Knowledge Management: The above diagram shows the flow for the internal database-backed knowledge base. The following diagrams illustrate the flow for the new Letta-integrated document knowledge management.*
+
+**Letta 文档上传流程 (Letta Document Upload Flow):**
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant FE as FastAPI Endpoint (/upload_to_letta)
+    participant LSvc as LettaService
+    participant LAI as Letta AI Platform
+    
+    U->>FE: 上传文档文件
+    FE->>LSvc: 调用 upload_document_to_agent
+    LSvc->>LAI: 上传文件并创建/附加到Source
+    LAI-->>LSvc: 返回处理状态
+    LSvc-->>FE: 返回上传结果
+    FE-->>U: 显示上传成功/失败
+end
+```
+
+**Letta 文档查询流程 (Letta Document Query Flow):**
+```mermaid
+sequenceDiagram
+    participant CA as CompanionAgent (元芳)
+    participant LKT as LettaKnowledgeTool
+    participant LSvc as LettaService
+    participant LAI as Letta AI Platform (Knowledge Agent)
+    
+    CA->>LKT: 执行知识查询 (query)
+    LKT->>LSvc: 调用 query_letta_agent
+    LSvc->>LAI: 发送查询到特定知识代理
+    LAI-->>LSvc: 返回查询结果
+    LSvc-->>LKT: 返回结果给工具
+    LKT-->>CA: 返回最终答案/信息
+end
 ```

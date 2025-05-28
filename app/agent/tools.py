@@ -4,6 +4,9 @@ from app.core.models import User, Conversation, Message, EmotionLog, Task, TaskA
 from sqlalchemy.orm import Session
 from datetime import datetime
 import json
+from config.logging_config import get_logger
+
+module_logger = get_logger(__name__) # Module-level logger
 
 class EmotionAnalysisTool(BaseTool):
     name = "emotion_analysis"
@@ -12,11 +15,15 @@ class EmotionAnalysisTool(BaseTool):
     def __init__(self, db: Session):
         super().__init__()
         self.db = db
+        self.logger = get_logger(__name__ + "." + self.__class__.__name__)
     
     def _run(self, conversation_id: int) -> Dict[str, Any]:
-        # 获取对话内容
-        messages = (self.db.query(Message)
-                   .filter(Message.conversation_id == conversation_id)
+        self.logger.info(f"Running emotion analysis for conversation_id: {conversation_id}")
+        try:
+            # 获取对话内容
+            self.logger.debug(f"Querying messages for conversation_id: {conversation_id}")
+            messages = (self.db.query(Message)
+                       .filter(Message.conversation_id == conversation_id)
                    .order_by(Message.timestamp.desc())
                    .limit(5)
                    .all())
@@ -27,14 +34,20 @@ class EmotionAnalysisTool(BaseTool):
             if msg.emotion:
                 emotions.append(msg.emotion)
         
-        if not emotions:
-            return {"emotion": "neutral", "intensity": 0.5}
-        
-        # 简单的情绪聚合
-        return {
-            "emotion": max(set(emotions), key=emotions.count),
-            "intensity": len(set(emotions)) / len(emotions)
-        }
+            if not emotions:
+                self.logger.debug(f"No emotions found for conversation_id: {conversation_id}, returning neutral.")
+                return {"emotion": "neutral", "intensity": 0.5}
+            
+            # 简单的情绪聚合
+            result = {
+                "emotion": max(set(emotions), key=emotions.count),
+                "intensity": len(set(emotions)) / len(emotions)
+            }
+            self.logger.info(f"Emotion analysis result for conversation_id {conversation_id}: {result}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Error in EmotionAnalysisTool for conversation_id {conversation_id}: {e}", exc_info=True)
+            return {"emotion": "error", "intensity": 0.0, "error": str(e)}
 
 class MemoryRecallTool(BaseTool):
     name = "memory_recall"
@@ -43,11 +56,15 @@ class MemoryRecallTool(BaseTool):
     def __init__(self, db: Session):
         super().__init__()
         self.db = db
+        self.logger = get_logger(__name__ + "." + self.__class__.__name__)
     
     def _run(self, user_id: int) -> Dict[str, Any]:
-        # 获取用户的历史对话
-        conversations = (self.db.query(Conversation)
-                        .filter(Conversation.user_id == user_id)
+        self.logger.info(f"Running memory recall for user_id: {user_id}")
+        try:
+            # 获取用户的历史对话
+            self.logger.debug(f"Querying conversations for user_id: {user_id}")
+            conversations = (self.db.query(Conversation)
+                            .filter(Conversation.user_id == user_id)
                         .order_by(Conversation.start_time.desc())
                         .limit(10)
                         .all())
@@ -71,13 +88,22 @@ class MemoryRecallTool(BaseTool):
                 if msg.emotion:
                     memory["emotions"].append(msg.emotion)
         
-        return memory
+            self.logger.info(f"Memory recall for user_id {user_id} found {len(memory['topics'])} topics, {len(memory['emotions'])} emotions.")
+            return memory
+        except Exception as e:
+            self.logger.error(f"Error in MemoryRecallTool for user_id {user_id}: {e}", exc_info=True)
+            return {"topics": [], "emotions": [], "preferences": [], "error": str(e)}
 
 class SafetyCheckTool(BaseTool):
     name = "safety_check"
     description = "检查回复是否适合工作场合"
+
+    def __init__(self): # Does not require DB session
+        super().__init__()
+        self.logger = get_logger(__name__ + "." + self.__class__.__name__)
     
     def _run(self, response: str) -> Dict[str, bool]:
+        self.logger.info(f"Running safety check for response: '{response[:50]}...'") # Log snippet
         # 这里可以接入更复杂的内容审核系统
         unsafe_words = [
             "机密", "内幕", "隐私", "竞争对手",
@@ -92,7 +118,11 @@ class SafetyCheckTool(BaseTool):
                 is_safe = False
                 break
         
-        return {"is_safe": is_safe}
+            self.logger.info(f"Safety check result for response: is_safe={is_safe}")
+            return {"is_safe": is_safe}
+        except Exception as e:
+            self.logger.error(f"Error in SafetyCheckTool for response '{response[:50]}...': {e}", exc_info=True)
+            return {"is_safe": False, "error": str(e)} # Default to not safe on error
 
 class EmotionLogTool(BaseTool):
     name = "emotion_log"
@@ -101,20 +131,24 @@ class EmotionLogTool(BaseTool):
     def __init__(self, db: Session):
         super().__init__()
         self.db = db
+        self.logger = get_logger(__name__ + "." + self.__class__.__name__)
     
     def _run(self, data: Dict[str, Any]) -> bool:
+        self.logger.info(f"Logging emotion for user_id: {data.get('user_id')}, emotion: {data.get('emotion')}")
         try:
             emotion_log = EmotionLog(
-                user_id=data["user_id"],
+                user_id=data["user_id"], # Assuming user_id is always present
                 emotion=data["emotion"],
-                intensity=data["intensity"],
+                intensity=data["intensity"], # Assuming intensity is always present
                 context=data.get("context"),
                 timestamp=datetime.utcnow()
             )
             self.db.add(emotion_log)
             self.db.commit()
+            self.logger.info(f"Emotion logged successfully for user_id: {data.get('user_id')}")
             return True
         except Exception as e:
+            self.logger.error(f"Error logging emotion for user_id {data.get('user_id')}: {e}", exc_info=True)
             self.db.rollback()
             return False
 
@@ -125,21 +159,25 @@ class TaskManagementTool(BaseTool):
     def __init__(self, db: Session):
         super().__init__()
         self.db = db
+        self.logger = get_logger(__name__ + "." + self.__class__.__name__)
     
     def _run(self, data: Dict[str, Any]) -> Dict[str, Any]:
         action = data.get("action")
+        self.logger.info(f"Running TaskManagementTool action: {action} with data: {data}")
         if action == "create":
             return self._create_task(data)
         elif action == "update":
             return self._update_task(data)
         elif action == "list":
             return self._list_tasks(data)
-        return {"error": "Invalid action"}
+        self.logger.warning(f"Invalid action '{action}' for TaskManagementTool.")
+        return {"success": False, "error": "Invalid action"}
     
     def _create_task(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        self.logger.info(f"Creating task for user_id: {data.get('user_id')}, title: {data.get('title')}")
         try:
             task = Task(
-                user_id=data["user_id"],
+                user_id=data["user_id"], # Assuming user_id is always present
                 title=data["title"],
                 description=data.get("description", ""),
                 status="pending",
@@ -156,15 +194,20 @@ class TaskManagementTool(BaseTool):
             self.db.add(activity)
             
             self.db.commit()
+            self.logger.info(f"Task '{data.get('title')}' created successfully with id: {task.id}")
             return {"success": True, "task_id": task.id}
         except Exception as e:
+            self.logger.error(f"Error creating task '{data.get('title')}': {e}", exc_info=True)
             self.db.rollback()
             return {"success": False, "error": str(e)}
     
     def _update_task(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        task_id = data.get("task_id")
+        self.logger.info(f"Updating task_id: {task_id} with data: {data}")
         try:
-            task = self.db.query(Task).get(data["task_id"])
+            task = self.db.query(Task).get(task_id)
             if not task:
+                self.logger.warning(f"Task not found for update, task_id: {task_id}")
                 return {"success": False, "error": "Task not found"}
             
             for key, value in data.items():
@@ -179,20 +222,26 @@ class TaskManagementTool(BaseTool):
             self.db.add(activity)
             
             self.db.commit()
+            self.logger.info(f"Task_id: {task_id} updated successfully.")
             return {"success": True}
         except Exception as e:
+            self.logger.error(f"Error updating task_id {task_id}: {e}", exc_info=True)
             self.db.rollback()
             return {"success": False, "error": str(e)}
     
     def _list_tasks(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        user_id = data.get("user_id")
+        status_filter = data.get("status")
+        self.logger.info(f"Listing tasks for user_id: {user_id}, status: {status_filter}")
         try:
             query = self.db.query(Task)
-            if "user_id" in data:
-                query = query.filter(Task.user_id == data["user_id"])
-            if "status" in data:
-                query = query.filter(Task.status == data["status"])
+            if user_id:
+                query = query.filter(Task.user_id == user_id)
+            if status_filter:
+                query = query.filter(Task.status == status_filter)
             
             tasks = query.order_by(Task.priority.desc(), Task.created_at.desc()).all()
+            self.logger.info(f"Found {len(tasks)} tasks for user_id: {user_id}, status: {status_filter}")
             return {
                 "success": True,
                 "tasks": [
@@ -207,6 +256,7 @@ class TaskManagementTool(BaseTool):
                 ]
             }
         except Exception as e:
+            self.logger.error(f"Error listing tasks for user_id {user_id}, status {status_filter}: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
 class WorkStatusTool(BaseTool):
@@ -216,33 +266,39 @@ class WorkStatusTool(BaseTool):
     def __init__(self, db: Session):
         super().__init__()
         self.db = db
+        self.logger = get_logger(__name__ + "." + self.__class__.__name__)
     
     def _run(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        new_status_val = data.get("status")
+        self.logger.info(f"Updating work status to: {new_status_val}, description: {data.get('description')}")
         try:
             # 结束当前状态
-            current_status = (
+            current_status_obj = (
                 self.db.query(WorkStatus)
                 .filter(WorkStatus.end_time.is_(None))
                 .first()
             )
-            if current_status:
-                current_status.end_time = datetime.utcnow()
+            if current_status_obj:
+                self.logger.debug(f"Ending current work status: {current_status_obj.status} (id: {current_status_obj.id})")
+                current_status_obj.end_time = datetime.utcnow()
             
             # 创建新状态
-            new_status = WorkStatus(
-                status=data["status"],
+            new_status_record = WorkStatus(
+                status=new_status_val, # Assuming status is always present
                 description=data.get("description"),
-                current_task_id=data.get("task_id")
+                current_task_id=data.get("task_id") 
             )
-            self.db.add(new_status)
+            self.db.add(new_status_record)
             self.db.commit()
+            self.logger.info(f"Work status updated to: {new_status_val} (id: {new_status_record.id})")
             
             return {
                 "success": True,
-                "status": new_status.status,
-                "start_time": new_status.start_time.isoformat()
+                "status": new_status_record.status,
+                "start_time": new_status_record.start_time.isoformat()
             }
         except Exception as e:
+            self.logger.error(f"Error updating work status to {new_status_val}: {e}", exc_info=True)
             self.db.rollback()
             return {"success": False, "error": str(e)}
 
@@ -253,11 +309,16 @@ class ReportGenerationTool(BaseTool):
     def __init__(self, db: Session):
         super().__init__()
         self.db = db
+        self.logger = get_logger(__name__ + "." + self.__class__.__name__)
     
     def _run(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        report_type = data.get("report_type")
+        start_time_str = data.get("start_time")
+        end_time_str = data.get("end_time")
+        self.logger.info(f"Generating report: type={report_type}, start={start_time_str}, end={end_time_str}")
         try:
             # 获取时间范围内的任务和活动
-            start_time = datetime.fromisoformat(data["start_time"])
+            start_time = datetime.fromisoformat(start_time_str) # Use var
             end_time = datetime.fromisoformat(data["end_time"])
             
             # 查询任务
@@ -275,12 +336,14 @@ class ReportGenerationTool(BaseTool):
             )
             
             # 生成报告内容
+            self.logger.debug(f"Generating report content for {len(tasks)} tasks and {len(work_status)} status records.")
             report_content = self._generate_report_content(tasks, work_status)
             metrics = self._calculate_metrics(tasks, work_status)
+            self.logger.debug(f"Generated report content and metrics: {metrics}")
             
             # 创建报告
             report = WorkReport(
-                report_type=data["report_type"],
+                report_type=report_type, 
                 start_time=start_time,
                 end_time=end_time,
                 content=report_content,
@@ -293,17 +356,18 @@ class ReportGenerationTool(BaseTool):
                 self.db.add(ReportTask(report_id=report.id, task_id=task.id))
             
             # 记录活动
-            for status in work_status:
+            for status_record in work_status: 
                 activity = WorkActivity(
                     report=report,
-                    activity_type=status.status,
-                    description=status.description,
-                    duration=int((status.end_time - status.start_time).total_seconds() / 60)
-                    if status.end_time else 0
+                    activity_type=status_record.status,
+                    description=status_record.description,
+                    duration=int((status_record.end_time - status_record.start_time).total_seconds() / 60)
+                    if status_record.end_time else 0
                 )
                 self.db.add(activity)
             
             self.db.commit()
+            self.logger.info(f"Report type '{report_type}' generated successfully with id: {report.id}")
             return {
                 "success": True,
                 "report_id": report.id,
@@ -311,10 +375,12 @@ class ReportGenerationTool(BaseTool):
                 "metrics": metrics
             }
         except Exception as e:
+            self.logger.error(f"Error generating report type '{report_type}': {e}", exc_info=True)
             self.db.rollback()
             return {"success": False, "error": str(e)}
     
     def _generate_report_content(self, tasks: List[Task], work_status: List[WorkStatus]) -> str:
+        self.logger.debug("Starting _generate_report_content")
         # 这里可以实现更复杂的报告生成逻辑
         content = []
         content.append("工作任务完成情况：")
@@ -323,19 +389,22 @@ class ReportGenerationTool(BaseTool):
         
         content.append("\n工作时间分配：")
         status_summary = {}
-        for status in work_status:
-            if status.status not in status_summary:
-                status_summary[status.status] = 0
-            duration = (status.end_time - status.start_time).total_seconds() / 3600 if status.end_time else 0
-            status_summary[status.status] += duration
+        for status_record in work_status: 
+            if status_record.status not in status_summary:
+                status_summary[status_record.status] = 0
+            duration = (status_record.end_time - status_record.start_time).total_seconds() / 3600 if status_record.end_time else 0
+            status_summary[status_record.status] += duration
         
-        for status, hours in status_summary.items():
-            content.append(f"- {status}: {hours:.1f}小时")
+        for status_key, hours in status_summary.items(): 
+            content.append(f"- {status_key}: {hours:.1f}小时")
         
-        return "\n".join(content)
+        generated_content = "\n".join(content)
+        self.logger.debug(f"Generated report content string: {generated_content[:200]}...")
+        return generated_content
     
     def _calculate_metrics(self, tasks: List[Task], work_status: List[WorkStatus]) -> Dict[str, Any]:
-        return {
+        self.logger.debug(f"Calculating metrics for {len(tasks)} tasks and {len(work_status)} status records.")
+        metrics = {
             "total_tasks": len(tasks),
             "completed_tasks": len([t for t in tasks if t.status == "completed"]),
             "work_hours": sum(
@@ -343,6 +412,8 @@ class ReportGenerationTool(BaseTool):
                 for s in work_status if s.end_time
             )
         }
+        self.logger.debug(f"Calculated metrics: {metrics}")
+        return metrics
 
 class ScheduleManagementTool(BaseTool):
     name = "schedule_management"
@@ -351,9 +422,11 @@ class ScheduleManagementTool(BaseTool):
     def __init__(self, db: Session):
         super().__init__()
         self.db = db
+        self.logger = get_logger(__name__ + "." + self.__class__.__name__)
     
     def _run(self, data: Dict[str, Any]) -> Dict[str, Any]:
         action = data.get("action")
+        self.logger.info(f"Running ScheduleManagementTool action: {action} with data: {data}")
         if action == "create":
             return self._create_schedule(data)
         elif action == "update":
@@ -362,13 +435,16 @@ class ScheduleManagementTool(BaseTool):
             return self._list_schedules(data)
         elif action == "check_conflicts":
             return self._check_conflicts(data)
-        return {"error": "Invalid action"}
+        self.logger.warning(f"Invalid action '{action}' for ScheduleManagementTool.")
+        return {"success": False, "error": "Invalid action"}
     
     def _create_schedule(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        title = data.get("title")
+        self.logger.info(f"Creating schedule: {title}, start: {data.get('start_time')}, end: {data.get('end_time')}")
         try:
             schedule = Schedule(
-                title=data["title"],
-                event_type=data["event_type"],
+                title=title, 
+                event_type=data["event_type"], 
                 start_time=datetime.fromisoformat(data["start_time"]),
                 end_time=datetime.fromisoformat(data["end_time"]),
                 description=data.get("description"),
@@ -388,41 +464,54 @@ class ScheduleManagementTool(BaseTool):
                 self.db.add(attendee)
             
             # 添加提醒
-            for reminder_time in data.get("reminders", []):
-                reminder = ScheduleReminder(
-                    schedule=schedule,
-                    reminder_time=datetime.fromisoformat(reminder_time)
-                )
-                self.db.add(reminder)
+            reminders_data = data.get("reminders", [])
+            if reminders_data:
+                self.logger.debug(f"Adding {len(reminders_data)} reminders for schedule: {title}")
+                for reminder_time_str in reminders_data:
+                    reminder = ScheduleReminder(
+                        schedule=schedule,
+                        reminder_time=datetime.fromisoformat(reminder_time_str)
+                    )
+                    self.db.add(reminder)
             
             self.db.commit()
+            self.logger.info(f"Schedule '{title}' created successfully with id: {schedule.id}")
             return {"success": True, "schedule_id": schedule.id}
         except Exception as e:
+            self.logger.error(f"Error creating schedule '{title}': {e}", exc_info=True)
             self.db.rollback()
             return {"success": False, "error": str(e)}
     
     def _update_schedule(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        schedule_id = data.get("schedule_id")
+        self.logger.info(f"Updating schedule_id: {schedule_id} with data: {data}")
         try:
-            schedule = self.db.query(Schedule).get(data["schedule_id"])
+            schedule = self.db.query(Schedule).get(schedule_id)
             if not schedule:
+                self.logger.warning(f"Schedule not found for update, schedule_id: {schedule_id}")
                 return {"success": False, "error": "Schedule not found"}
             
             for key, value in data.items():
-                if hasattr(schedule, key) and key not in ["id", "created_at"]:
+                if hasattr(schedule, key) and key not in ["id", "created_at"]: 
                     if key in ["start_time", "end_time"] and isinstance(value, str):
                         value = datetime.fromisoformat(value)
                     setattr(schedule, key, value)
             
             self.db.commit()
+            self.logger.info(f"Schedule_id: {schedule_id} updated successfully.")
             return {"success": True}
         except Exception as e:
+            self.logger.error(f"Error updating schedule_id {schedule_id}: {e}", exc_info=True)
             self.db.rollback()
             return {"success": False, "error": str(e)}
     
     def _list_schedules(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        start_time_str = data.get("start_time")
+        end_time_str = data.get("end_time")
+        self.logger.info(f"Listing schedules from start_time: {start_time_str} to end_time: {end_time_str}")
         try:
-            start_time = datetime.fromisoformat(data["start_time"])
-            end_time = datetime.fromisoformat(data["end_time"])
+            start_time = datetime.fromisoformat(start_time_str)
+            end_time = datetime.fromisoformat(end_time_str)
             
             schedules = (
                 self.db.query(Schedule)

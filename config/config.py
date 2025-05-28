@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
+    # Letta AI Configuration
+    LETTA_SERVER_URL: str = os.getenv("LETTA_SERVER_URL", "http://localhost:8283")
+    LETTA_SERVER_TOKEN: Optional[str] = os.getenv("LETTA_SERVER_TOKEN")
+    LETTA_KNOWLEDGE_AGENT_NAME: str = os.getenv("LETTA_KNOWLEDGE_AGENT_NAME", "YuanfangKnowledgeAgent")
+    LETTA_KNOWLEDGE_AGENT_ID: Optional[str] = os.getenv("LETTA_KNOWLEDGE_AGENT_ID") # This might be set after agent creation
+    LETTA_KNOWLEDGE_LLM_MODEL: str = os.getenv("LETTA_KNOWLEDGE_LLM_MODEL", "Qwen/Qwen2-7B-Instruct") # Changed from Qwen3-8B as per user example
+    LETTA_KNOWLEDGE_EMBEDDING_MODEL: str = os.getenv("LETTA_KNOWLEDGE_EMBEDDING_MODEL", "BAAI/bge-m3")
+
     # 数字员工配置
     EMPLOYEE_NAME: str = "元芳"
     EMPLOYEE_ID: str = "DE001"
